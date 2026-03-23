@@ -6,7 +6,7 @@ import re
 
 st.set_page_config(page_title="UT Optimizado", layout="wide")
 
-st.title("📊 Dashboard UT - Asignación Inteligente")
+st.title("📊 Dashboard UT - Asignación Inteligente PRO")
 
 archivo = st.file_uploader("Sube archivo", type=["xlsx"])
 
@@ -56,7 +56,7 @@ if archivo:
         df.columns = df.columns.str.strip()
 
         # =========================
-        # OPTIMIZACIÓN MEMORIA
+        # OPTIMIZACIÓN
         # =========================
         df[col_barrio] = df[col_barrio].astype("category")
         df[col_ciclo] = df[col_ciclo].astype("category")
@@ -73,7 +73,7 @@ if archivo:
         df["_deuda_num"] = pd.to_numeric(df["_deuda_num"], errors="coerce").fillna(0)
 
         # =========================
-        # LIMPIAR RANGO EDAD
+        # LIMPIAR RANGO
         # =========================
         df[col_edad] = df[col_edad].fillna("SIN DATO").astype(str)
 
@@ -123,7 +123,7 @@ if archivo:
             )
 
         # =========================
-        # FILTRO
+        # FILTRADO
         # =========================
         mask = (
             df[col_ciclo].isin(ciclos_sel) &
@@ -134,7 +134,7 @@ if archivo:
         df_filtrado = df.loc[mask].copy()
 
         # =========================
-        # SEPARAR CON Y SIN TECNICO
+        # SEPARAR
         # =========================
         df_con_tecnico = df_filtrado[df_filtrado[col_tecnico].notna()].copy()
         df_sin_tecnico = df_filtrado[df_filtrado[col_tecnico].isna()].copy()
@@ -148,7 +148,7 @@ if archivo:
         ]
 
         # =========================
-        # ORDEN LOGICO
+        # ORDEN
         # =========================
         df_con_tecnico = df_con_tecnico.sort_values(
             by=[col_ciclo, col_barrio, "DIR_BASE"]
@@ -158,17 +158,18 @@ if archivo:
             by=[col_ciclo, col_barrio, "DIR_BASE"]
         )
 
+        # =========================
+        # ASIGNACIÓN PRO (MAX 50 REAL)
+        # =========================
         asignados = []
         usados = set()
 
         tecnicos_final = [t for t in tecnicos_sel if t not in excluir]
 
-        # =========================
-        # 1. RESPETAR ASIGNADOS
-        # =========================
-        for tec in tecnicos_final:
+        conteo_tecnicos = {tec: 0 for tec in tecnicos_final}
 
-            cupo = 50
+        # -------- 1. RESPETAR --------
+        for tec in tecnicos_final:
 
             df_tec = df_con_tecnico[
                 (df_con_tecnico[col_tecnico] == tec) &
@@ -177,22 +178,20 @@ if archivo:
 
             for _, grupo in df_tec.groupby([col_ciclo, col_barrio, "DIR_BASE"]):
 
-                if cupo <= 0:
+                restante = 50 - conteo_tecnicos[tec]
+
+                if restante <= 0:
                     break
 
-                bloque = grupo.head(cupo)
+                bloque = grupo.head(restante)
 
                 asignados.append(bloque)
                 usados.update(bloque.index)
 
-                cupo -= len(bloque)
+                conteo_tecnicos[tec] += len(bloque)
 
-        # =========================
-        # 2. REPARTIR SIN TECNICO
-        # =========================
+        # -------- 2. REPARTIR VACÍOS --------
         for tec in tecnicos_final:
-
-            cupo = 50
 
             disponibles = df_sin_tecnico.loc[
                 ~df_sin_tecnico.index.isin(usados)
@@ -200,22 +199,23 @@ if archivo:
 
             for _, grupo in disponibles.groupby([col_ciclo, col_barrio, "DIR_BASE"]):
 
-                if cupo <= 0:
+                restante = 50 - conteo_tecnicos[tec]
+
+                if restante <= 0:
                     break
 
-                bloque = grupo.head(cupo)
+                bloque = grupo.head(restante)
 
                 temp = bloque.copy()
                 temp[col_tecnico] = tec
 
                 asignados.append(temp)
-
                 usados.update(bloque.index)
 
-                cupo -= len(bloque)
+                conteo_tecnicos[tec] += len(bloque)
 
         # =========================
-        # RESULTADO FINAL
+        # RESULTADO
         # =========================
         if asignados:
             df_final = pd.concat(asignados, ignore_index=True)
@@ -227,6 +227,14 @@ if archivo:
         # =========================
         st.success(f"Total asignado: {len(df_final)}")
         st.dataframe(df_final, use_container_width=True)
+
+        # =========================
+        # CONTROL
+        # =========================
+        st.subheader("📊 Control por Técnico")
+        control = df_final[col_tecnico].value_counts().reset_index()
+        control.columns = ["Técnico", "Cantidad"]
+        st.dataframe(control, use_container_width=True)
 
         # =========================
         # DASHBOARD
