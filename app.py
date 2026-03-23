@@ -6,7 +6,7 @@ import re
 
 st.set_page_config(page_title="UT Optimizado", layout="wide")
 
-st.title("📊 Dashboard UT - Optimizado")
+st.title("📊 Dashboard UT - Asignación Inteligente")
 
 archivo = st.file_uploader("Sube archivo", type=["xlsx"])
 
@@ -38,7 +38,7 @@ def normalizar_direccion(dir):
         return str(dir)
 
 # =========================
-# ORDENAR RANGOS DE EDAD
+# ORDENAR RANGOS
 # =========================
 def ordenar_rangos(rangos):
     orden = ["0-30", "31-60", "61-90", "91-120", "121-360", "361-1080", ">1080"]
@@ -53,13 +53,13 @@ if archivo:
         ]
 
         df = pd.read_excel(archivo, usecols=columnas)
+        df.columns = df.columns.str.strip()
 
         # =========================
         # OPTIMIZACIÓN MEMORIA
         # =========================
         df[col_barrio] = df[col_barrio].astype("category")
         df[col_ciclo] = df[col_ciclo].astype("category")
-        df[col_tecnico] = df[col_tecnico].astype("category")
 
         # =========================
         # LIMPIAR DEUDA
@@ -85,29 +85,31 @@ if archivo:
         # =========================
         # FILTROS
         # =========================
-        with st.expander("🎯 Filtros"):
+        with st.expander("🎯 Filtros", expanded=True):
 
             ciclos_sel = st.multiselect(
                 "Ciclo",
-                ordenar_rangos(df[col_ciclo].unique()),
+                sorted(df[col_ciclo].unique()),
                 default=list(df[col_ciclo].unique())
             )
 
+            tecnicos_all = df[col_tecnico].dropna().astype(str).unique()
+
             tecnicos_sel = st.multiselect(
                 "Técnicos",
-                df[col_tecnico].unique(),
-                default=df[col_tecnico].unique()
+                tecnicos_all,
+                default=tecnicos_all
             )
 
             excluir = st.multiselect(
                 "🚫 Técnicos a excluir",
-                df[col_tecnico].unique()
+                tecnicos_all
             )
 
             rangos_disp = ordenar_rangos(df[col_edad].unique())
 
             rangos_sel = st.multiselect(
-                "📊 Rango de Edad",
+                "📊 Rango Edad",
                 rangos_disp,
                 default=rangos_disp
             )
@@ -121,38 +123,80 @@ if archivo:
             )
 
         # =========================
-        # FILTRO PRINCIPAL
+        # FILTRO
         # =========================
         mask = (
             df[col_ciclo].isin(ciclos_sel) &
-            df[col_tecnico].isin(tecnicos_sel) &
-            ~df[col_tecnico].isin(excluir) &
             (df["_deuda_num"] >= deuda_min) &
             df[col_edad].isin(rangos_sel)
         )
 
-        df_filtrado = df.loc[mask]
+        df_filtrado = df.loc[mask].copy()
+
+        # =========================
+        # SEPARAR CON Y SIN TECNICO
+        # =========================
+        df_con_tecnico = df_filtrado[df_filtrado[col_tecnico].notna()].copy()
+        df_sin_tecnico = df_filtrado[df_filtrado[col_tecnico].isna()].copy()
+
+        df_con_tecnico = df_con_tecnico[
+            df_con_tecnico[col_tecnico].isin(tecnicos_sel)
+        ]
+
+        df_con_tecnico = df_con_tecnico[
+            ~df_con_tecnico[col_tecnico].isin(excluir)
+        ]
 
         # =========================
         # ORDEN LOGICO
         # =========================
-        df_filtrado = df_filtrado.sort_values(
+        df_con_tecnico = df_con_tecnico.sort_values(
             by=[col_ciclo, col_barrio, "DIR_BASE"]
         )
 
-        # =========================
-        # ASIGNACIÓN
-        # =========================
+        df_sin_tecnico = df_sin_tecnico.sort_values(
+            by=[col_ciclo, col_barrio, "DIR_BASE"]
+        )
+
         asignados = []
         usados = set()
 
         tecnicos_final = [t for t in tecnicos_sel if t not in excluir]
 
+        # =========================
+        # 1. RESPETAR ASIGNADOS
+        # =========================
         for tec in tecnicos_final:
 
             cupo = 50
 
-            disponibles = df_filtrado.loc[~df_filtrado.index.isin(usados)]
+            df_tec = df_con_tecnico[
+                (df_con_tecnico[col_tecnico] == tec) &
+                (~df_con_tecnico.index.isin(usados))
+            ]
+
+            for _, grupo in df_tec.groupby([col_ciclo, col_barrio, "DIR_BASE"]):
+
+                if cupo <= 0:
+                    break
+
+                bloque = grupo.head(cupo)
+
+                asignados.append(bloque)
+                usados.update(bloque.index)
+
+                cupo -= len(bloque)
+
+        # =========================
+        # 2. REPARTIR SIN TECNICO
+        # =========================
+        for tec in tecnicos_final:
+
+            cupo = 50
+
+            disponibles = df_sin_tecnico.loc[
+                ~df_sin_tecnico.index.isin(usados)
+            ]
 
             for _, grupo in disponibles.groupby([col_ciclo, col_barrio, "DIR_BASE"]):
 
@@ -167,18 +211,21 @@ if archivo:
                 asignados.append(temp)
 
                 usados.update(bloque.index)
+
                 cupo -= len(bloque)
 
+        # =========================
+        # RESULTADO FINAL
+        # =========================
         if asignados:
             df_final = pd.concat(asignados, ignore_index=True)
         else:
             df_final = pd.DataFrame()
 
         # =========================
-        # RESULTADOS
+        # TABLA
         # =========================
         st.success(f"Total asignado: {len(df_final)}")
-
         st.dataframe(df_final, use_container_width=True)
 
         # =========================
@@ -191,8 +238,7 @@ if archivo:
             with col1:
                 st.subheader("🏆 Top Técnicos (Deuda)")
                 ranking = (
-                    df_final
-                    .groupby(col_tecnico)["_deuda_num"]
+                    df_final.groupby(col_tecnico)["_deuda_num"]
                     .sum()
                     .sort_values(ascending=False)
                     .reset_index()
@@ -208,7 +254,13 @@ if archivo:
 
             st.subheader("📊 Rango Edad")
 
-            conteo = df_final[col_edad].value_counts().reindex(ordenar_rangos(df_final[col_edad].unique())).reset_index()
+            conteo = (
+                df_final[col_edad]
+                .value_counts()
+                .reindex(ordenar_rangos(df_final[col_edad].unique()))
+                .reset_index()
+            )
+
             conteo.columns = ["Rango", "Cantidad"]
 
             fig_bar = px.bar(conteo, x="Rango", y="Cantidad", text_auto=True)
@@ -220,7 +272,11 @@ if archivo:
         output = io.BytesIO()
         df_final.drop(columns=["_deuda_num"], errors="ignore").to_excel(output, index=False)
 
-        st.download_button("📥 Descargar Excel", data=output.getvalue())
+        st.download_button(
+            "📥 Descargar Excel",
+            data=output.getvalue(),
+            file_name="asignacion_ut.xlsx"
+        )
 
     except Exception as e:
         st.error(f"Error: {e}")
