@@ -43,56 +43,51 @@ if archivo:
         df["_deuda_num"] = pd.to_numeric(df["_deuda_num"], errors="coerce").fillna(0)
 
         # =========================
-        # 2. PROCESAR EDADES
-        # =========================
-        df["_edad_min"] = df[col_edad].astype(str).str.extract(r"(\d+)").astype(float)
-        df["_edad_max"] = df[col_edad].astype(str).str.extract(r"-(\d+)").astype(float)
-        df["_edad_max"] = df["_edad_max"].fillna(df["_edad_min"])
-
-        # =========================
-        # 3. TABS PRINCIPALES
+        # 2. TABS PRINCIPALES
         # =========================
         tab_filtros, tab1, tab2 = st.tabs(["⚙️ Filtros", "📋 Tabla y Descarga", "📊 Dashboard"])
 
         # =========================
-        # TAB FILTROS
+        # TAB FILTROS (VERTICAL)
         # =========================
         with tab_filtros:
             st.subheader("⚙️ Configuración de Filtros")
 
-            colf1, colf2, colf3 = st.columns(3)
+            # CICLOS
+            ciclos_disp = sorted(df[col_ciclo].astype(str).unique())
+            ciclos_sel = st.multiselect(
+                "Filtrar Ciclos",
+                ciclos_disp,
+                default=ciclos_disp
+            )
 
-            with colf1:
-                ciclos_disp = sorted(df[col_ciclo].astype(str).unique())
-                ciclos_sel = st.multiselect("Filtrar Ciclos", ciclos_disp, default=ciclos_disp)
+            # TÉCNICOS
+            todos_tecnicos = sorted(df[col_tecnico].astype(str).unique())
+            tecnicos_sel = st.multiselect(
+                "Técnicos a Procesar",
+                todos_tecnicos,
+                default=todos_tecnicos
+            )
 
-            with colf2:
-                todos_tecnicos = sorted(df[col_tecnico].astype(str).unique())
-                tecnicos_sel = st.multiselect("Técnicos a Procesar", todos_tecnicos, default=todos_tecnicos)
-
-            with colf3:
-                edad_min_global = int(df["_edad_min"].min())
-                edad_max_global = int(df["_edad_max"].max())
-
-                edad_rango = st.slider(
-                    "Filtrar por Edad",
-                    min_value=edad_min_global,
-                    max_value=edad_max_global,
-                    value=(edad_min_global, edad_max_global)
-                )
+            # RANGO DE EDAD (MULTISELECT COMO PEDISTE)
+            edades_disp = sorted(df[col_edad].astype(str).dropna().unique())
+            edades_sel = st.multiselect(
+                "Filtrar por Rango de Edad",
+                edades_disp,
+                default=edades_disp
+            )
 
         # =========================
-        # 4. FILTRAR DATOS
+        # 3. FILTRAR DATOS
         # =========================
         df_pool = df[
             (df[col_ciclo].astype(str).isin(ciclos_sel)) &
             (df[col_tecnico].isin(tecnicos_sel)) &
-            (df["_edad_min"] >= edad_rango[0]) &
-            (df["_edad_max"] <= edad_rango[1])
+            (df[col_edad].astype(str).isin(edades_sel))
         ].copy()
 
         # =========================
-        # 5. LÓGICA DE ASIGNACIÓN
+        # 4. LÓGICA DE ASIGNACIÓN
         # =========================
         unidades_ph = [
             "ITA SUSPENSION BQ 15 PH", "ITA SUSPENSION BQ 31 PH", "ITA SUSPENSION BQ 32 PH",
