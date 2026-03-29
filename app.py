@@ -92,4 +92,120 @@ if archivo:
         # LÓGICA DE ASIGNACIÓN
         # =========================
         unidades_ph = [
-            "ITA SUSPENSION BQ 15 PH", "ITA SUSPENSION BQ 31 PH", "ITA SUSPE
+            "ITA SUSPENSION BQ 15 PH", "ITA SUSPENSION BQ 31 PH", "ITA SUSPENSION BQ 32 PH",
+            "ITA SUSPENSION BQ 34 PH", "ITA SUSPENSION BQ 35 PH", "ITA SUS-PENSION BQ 36 PH",
+            "ITA SUSPENSION BQ 37 PH"
+        ]
+
+        # PH
+        df_ph_final = (
+            df_con_tecnico[df_con_tecnico[col_tecnico].isin(unidades_ph)]
+            .sort_values(by="_deuda_num", ascending=False)
+            .groupby(col_tecnico)
+            .head(50)
+        )
+
+        # OTROS + SIN TÉCNICO
+        df_otros = pd.concat([
+            df_con_tecnico[~df_con_tecnico[col_tecnico].isin(unidades_ph)],
+            df_sin_tecnico
+        ]).copy()
+
+        df_otros = df_otros.sort_values(by=[col_ciclo, col_barrio, col_direccion])
+
+        lista_final_otros = []
+        indices_asignados = set()
+
+        tecnicos_no_ph = [t for t in tecnicos_sel if t not in unidades_ph]
+
+        cupo_por_tecnico = {tec: 50 for tec in tecnicos_no_ph}
+        ciclo_tecnicos = cycle(tecnicos_no_ph)
+
+        while True:
+            pols_disponibles = df_otros[~df_otros.index.isin(indices_asignados)]
+
+            if pols_disponibles.empty:
+                break
+
+            tec = next(ciclo_tecnicos)
+
+            if cupo_por_tecnico[tec] <= 0:
+                continue
+
+            barrio_actual = pols_disponibles.iloc[0][col_barrio]
+
+            bloque = pols_disponibles[
+                pols_disponibles[col_barrio] == barrio_actual
+            ].head(cupo_por_tecnico[tec])
+
+            if bloque.empty:
+                break
+
+            bloque = bloque.copy()
+            bloque[col_tecnico] = tec
+
+            lista_final_otros.append(bloque)
+            indices_asignados.update(bloque.index)
+
+            cupo_por_tecnico[tec] -= len(bloque)
+
+        df_resultado = pd.concat([df_ph_final] + lista_final_otros, ignore_index=True)
+
+        # Asegurar todos los técnicos en salida
+        tecnicos_presentes = set(df_resultado[col_tecnico].dropna().unique())
+        tecnicos_faltantes = [t for t in tecnicos_sel if t not in tecnicos_presentes]
+
+        if tecnicos_faltantes:
+            df_faltantes = pd.DataFrame({col_tecnico: tecnicos_faltantes})
+            df_resultado = pd.concat([df_resultado, df_faltantes], ignore_index=True)
+
+        # =========================
+        # TABLA
+        # =========================
+        with tab1:
+            st.dataframe(df_resultado.drop(columns=["_deuda_num"]), use_container_width=True)
+
+            output = io.BytesIO()
+            with pd.ExcelWriter(output, engine="openpyxl") as writer:
+                df_resultado.drop(columns=["_deuda_num"]).to_excel(writer, index=False)
+
+            st.download_button("📥 Descargar Excel", data=output.getvalue(), file_name="Asignacion_UT.xlsx")
+
+        # =========================
+        # DASHBOARD
+        # =========================
+        with tab2:
+            c1, c2 = st.columns(2)
+
+            with c1:
+                st.subheader("🏆 Top 10 Técnicos (Deuda)")
+                ranking = (
+                    df_resultado.groupby(col_tecnico)["_deuda_num"]
+                    .sum()
+                    .sort_values(ascending=False)
+                    .head(10)
+                    .reset_index()
+                )
+                ranking.columns = ["Técnico", "Deuda"]
+                ranking["Deuda"] = ranking["Deuda"].apply(lambda x: f"$ {x:,.0f}")
+                st.table(ranking)
+
+            with c2:
+                st.subheader("🥧 Distribución por Subcategoría")
+                conteo_sub = df_resultado[col_subcat].value_counts().reset_index()
+                conteo_sub.columns = [col_subcat, "cantidad"]
+
+                fig_pie = px.pie(conteo_sub, names=col_subcat, values="cantidad", hole=0.4)
+                st.plotly_chart(fig_pie, use_container_width=True)
+
+            st.divider()
+
+            st.subheader("📊 Pólizas por Rango de Edad")
+            conteo_edad = df_resultado[col_edad].value_counts().reset_index()
+            conteo_edad.columns = [col_edad, "cantidad"]
+
+            fig_bar = px.bar(conteo_edad, x=col_edad, y="cantidad", color=col_edad, text_auto=True)
+            st.plotly_chart(fig_bar, use_container_width=True)
+
+    except Exception as e:
+        st.error(f"Error detectado: {e}")
