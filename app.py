@@ -49,7 +49,7 @@ if archivo:
         )
         df["_deuda_num"] = pd.to_numeric(df["_deuda_num"], errors="coerce").fillna(0)
 
-        # 🔥 Optimización de memoria
+        # Optimización
         df[col_barrio] = df[col_barrio].astype("category")
         df[col_ciclo] = df[col_ciclo].astype("category")
         df[col_edad] = df[col_edad].astype("category")
@@ -127,7 +127,7 @@ if archivo:
         )
 
         # =========================
-        # 🚀 ASIGNACIÓN ULTRA RÁPIDA
+        # 🚀 ASIGNACIÓN ESTABLE
         # =========================
         df_otros = pd.concat([
             df_con_tecnico[~df_con_tecnico[col_tecnico].isin(unidades_ph)],
@@ -138,49 +138,55 @@ if archivo:
             by=["_prioridad_edad", col_ciclo, col_barrio, col_direccion]
         )
 
-        grupos_barrio = list(df_otros.groupby(col_barrio))
-
         tecnicos_no_ph = [t for t in tecnicos_sel if t not in unidades_ph]
+
+        if len(tecnicos_no_ph) == 0:
+            st.error("No hay técnicos disponibles para asignar")
+            st.stop()
+
         cupo_por_tecnico = {tec: 50 for tec in tecnicos_no_ph}
-        asignaciones = {tec: [] for tec in tecnicos_no_ph}
+        asignaciones = []
 
         tec_idx = 0
         total_tecnicos = len(tecnicos_no_ph)
 
-        for _, grupo in grupos_barrio:
+        for barrio, grupo in df_otros.groupby(col_barrio):
 
-            if all(cupo <= 0 for cupo in cupo_por_tecnico.values()):
-                break
+            grupo = grupo.copy()
+            i = 0
+            n = len(grupo)
 
-            inicio = 0
-            grupo_len = len(grupo)
+            while i < n:
 
-            while inicio < grupo_len:
+                # cortar si todos llenos
+                if all(c <= 0 for c in cupo_por_tecnico.values()):
+                    break
+
                 tec = tecnicos_no_ph[tec_idx % total_tecnicos]
 
+                # evitar loop infinito
                 if cupo_por_tecnico[tec] <= 0:
                     tec_idx += 1
+
+                    if tec_idx > total_tecnicos * 2:
+                        break
+
                     continue
 
                 cupo = cupo_por_tecnico[tec]
 
-                bloque = grupo.iloc[inicio:inicio + cupo].copy()
+                bloque = grupo.iloc[i:i + cupo].copy()
                 bloque[col_tecnico] = tec
 
-                asignaciones[tec].append(bloque)
+                asignaciones.append(bloque)
 
                 asignados = len(bloque)
                 cupo_por_tecnico[tec] -= asignados
 
-                inicio += asignados
+                i += asignados
                 tec_idx += 1
 
-        lista_final_otros = []
-        for tec in asignaciones:
-            if asignaciones[tec]:
-                lista_final_otros.append(pd.concat(asignaciones[tec]))
-
-        df_resultado = pd.concat([df_ph_final] + lista_final_otros, ignore_index=True)
+        df_resultado = pd.concat([df_ph_final] + asignaciones, ignore_index=True)
 
         # =========================
         # ASEGURAR TODOS LOS TÉCNICOS
