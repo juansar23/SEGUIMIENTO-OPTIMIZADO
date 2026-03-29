@@ -2,7 +2,6 @@ import streamlit as st
 import pandas as pd
 import io
 import plotly.express as px
-from itertools import cycle
 
 # Configuración
 st.set_page_config(page_title="Dashboard Ejecutivo UT", layout="wide")
@@ -32,10 +31,9 @@ if archivo:
 
         df.columns = df.columns.str.strip()
 
-        # Limpieza general
-        df[col_subcat] = df[col_subcat].astype(str).str.strip()
-
-        # Limpieza deuda
+        # =========================
+        # LIMPIEZA DEUDA
+        # =========================
         df["_deuda_num"] = (
             df[col_deuda].astype(str)
             .str.replace("$", "", regex=False)
@@ -59,26 +57,23 @@ if archivo:
             ciclos_disp = sorted(df[col_ciclo].dropna().astype(str).unique())
             ciclos_sel = st.multiselect("Filtrar Ciclos", ciclos_disp, default=ciclos_disp)
 
-            tecnicos_disp = sorted(df[col_tecnico].dropna().astype(str).str.strip().unique())
-            tecnicos_sel = st.multiselect("Técnicos a Procesar", tecnicos_disp, default=tecnicos_disp)
+            # 🔥 FIX: quitar nan
+            todos_tecnicos = sorted(df[col_tecnico].dropna().astype(str).str.strip().unique())
+            tecnicos_sel = st.multiselect("Técnicos a Procesar", todos_tecnicos, default=todos_tecnicos)
 
             edades_disp = sorted(df[col_edad].dropna().astype(str).unique())
             edades_sel = st.multiselect("Filtrar por Rango de Edad", edades_disp, default=edades_disp)
-
-            subcat_disp = sorted(df[col_subcat].dropna().unique())
-            subcat_sel = st.multiselect("Filtrar por Subcategoría", subcat_disp, default=subcat_disp)
 
         # =========================
         # FILTRADO BASE
         # =========================
         df_pool = df[
             (df[col_ciclo].astype(str).isin(ciclos_sel)) &
-            (df[col_edad].astype(str).isin(edades_sel)) &
-            (df[col_subcat].isin(subcat_sel))
+            (df[col_edad].astype(str).isin(edades_sel))
         ].copy()
 
         # =========================
-        # SEPARAR SIN TÉCNICO
+        # SEPARAR SIN TÉCNICO (ANTES DE STRING)
         # =========================
         df_sin_tecnico = df_pool[
             df_pool[col_tecnico].isna() |
@@ -118,46 +113,31 @@ if archivo:
 
         tecnicos_no_ph = [t for t in tecnicos_sel if t not in unidades_ph]
 
-        cupo_por_tecnico = {tec: 50 for tec in tecnicos_no_ph}
-        ciclo_tecnicos = cycle(tecnicos_no_ph)
+        for tec in tecnicos_no_ph:
+            cupo = 50
+            acumulado_tec = []
 
-        while True:
             pols_disponibles = df_otros[~df_otros.index.isin(indices_asignados)]
 
-            if pols_disponibles.empty:
-                break
+            while cupo > 0 and not pols_disponibles.empty:
+                barrio_actual = pols_disponibles.iloc[0][col_barrio]
 
-            tec = next(ciclo_tecnicos)
+                bloque_barrio = pols_disponibles[
+                    pols_disponibles[col_barrio] == barrio_actual
+                ].head(cupo)
 
-            if cupo_por_tecnico[tec] <= 0:
-                continue
+                acumulado_tec.append(bloque_barrio)
+                indices_asignados.update(bloque_barrio.index)
 
-            barrio_actual = pols_disponibles.iloc[0][col_barrio]
+                cupo -= len(bloque_barrio)
+                pols_disponibles = df_otros[~df_otros.index.isin(indices_asignados)]
 
-            bloque = pols_disponibles[
-                pols_disponibles[col_barrio] == barrio_actual
-            ].head(cupo_por_tecnico[tec])
-
-            if bloque.empty:
-                break
-
-            bloque = bloque.copy()
-            bloque[col_tecnico] = tec
-
-            lista_final_otros.append(bloque)
-            indices_asignados.update(bloque.index)
-
-            cupo_por_tecnico[tec] -= len(bloque)
+            if acumulado_tec:
+                df_tec_res = pd.concat(acumulado_tec)
+                df_tec_res[col_tecnico] = tec
+                lista_final_otros.append(df_tec_res)
 
         df_resultado = pd.concat([df_ph_final] + lista_final_otros, ignore_index=True)
-
-        # Asegurar todos los técnicos en salida
-        tecnicos_presentes = set(df_resultado[col_tecnico].dropna().unique())
-        tecnicos_faltantes = [t for t in tecnicos_sel if t not in tecnicos_presentes]
-
-        if tecnicos_faltantes:
-            df_faltantes = pd.DataFrame({col_tecnico: tecnicos_faltantes})
-            df_resultado = pd.concat([df_resultado, df_faltantes], ignore_index=True)
 
         # =========================
         # TABLA
