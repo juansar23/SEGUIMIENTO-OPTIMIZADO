@@ -48,46 +48,45 @@ if archivo:
         tab_filtros, tab1, tab2 = st.tabs(["⚙️ Filtros", "📋 Tabla y Descarga", "📊 Dashboard"])
 
         # =========================
-        # TAB FILTROS (VERTICAL)
+        # TAB FILTROS
         # =========================
         with tab_filtros:
             st.subheader("⚙️ Configuración de Filtros")
 
-            # CICLOS
             ciclos_disp = sorted(df[col_ciclo].astype(str).unique())
-            ciclos_sel = st.multiselect(
-                "Filtrar Ciclos",
-                ciclos_disp,
-                default=ciclos_disp
-            )
+            ciclos_sel = st.multiselect("Filtrar Ciclos", ciclos_disp, default=ciclos_disp)
 
-            # TÉCNICOS
             todos_tecnicos = sorted(df[col_tecnico].astype(str).unique())
-            tecnicos_sel = st.multiselect(
-                "Técnicos a Procesar",
-                todos_tecnicos,
-                default=todos_tecnicos
-            )
+            tecnicos_sel = st.multiselect("Técnicos a Procesar", todos_tecnicos, default=todos_tecnicos)
 
-            # RANGO DE EDAD (MULTISELECT COMO PEDISTE)
             edades_disp = sorted(df[col_edad].astype(str).dropna().unique())
-            edades_sel = st.multiselect(
-                "Filtrar por Rango de Edad",
-                edades_disp,
-                default=edades_disp
-            )
+            edades_sel = st.multiselect("Filtrar por Rango de Edad", edades_disp, default=edades_disp)
 
         # =========================
         # 3. FILTRAR DATOS
         # =========================
         df_pool = df[
             (df[col_ciclo].astype(str).isin(ciclos_sel)) &
-            (df[col_tecnico].isin(tecnicos_sel)) &
             (df[col_edad].astype(str).isin(edades_sel))
         ].copy()
 
         # =========================
-        # 4. LÓGICA DE ASIGNACIÓN
+        # 4. LIMPIAR TÉCNICOS
+        # =========================
+        df_pool[col_tecnico] = df_pool[col_tecnico].astype(str).str.strip()
+
+        df_sin_tecnico = df_pool[
+            (df_pool[col_tecnico].isna()) |
+            (df_pool[col_tecnico] == "") |
+            (df_pool[col_tecnico].str.lower() == "nan")
+        ].copy()
+
+        df_con_tecnico = df_pool[
+            ~(df_pool.index.isin(df_sin_tecnico.index))
+        ].copy()
+
+        # =========================
+        # 5. LÓGICA DE ASIGNACIÓN
         # =========================
         unidades_ph = [
             "ITA SUSPENSION BQ 15 PH", "ITA SUSPENSION BQ 31 PH", "ITA SUSPENSION BQ 32 PH",
@@ -95,27 +94,38 @@ if archivo:
             "ITA SUSPENSION BQ 37 PH"
         ]
 
+        # PH (igual)
         df_ph_final = (
-            df_pool[df_pool[col_tecnico].isin(unidades_ph)]
+            df_con_tecnico[df_con_tecnico[col_tecnico].isin(unidades_ph)]
             .sort_values(by="_deuda_num", ascending=False)
             .groupby(col_tecnico)
             .head(50)
         )
 
-        df_otros = df_pool[~df_pool[col_tecnico].isin(unidades_ph)].copy()
+        # OTROS + SIN TÉCNICO
+        df_otros = pd.concat([
+            df_con_tecnico[~df_con_tecnico[col_tecnico].isin(unidades_ph)],
+            df_sin_tecnico
+        ]).copy()
+
         df_otros = df_otros.sort_values(by=[col_ciclo, col_barrio, col_direccion])
 
         lista_final_otros = []
         indices_asignados = set()
 
-        for tec in [t for t in tecnicos_sel if t not in unidades_ph]:
+        # SOLO técnicos NO PH
+        tecnicos_no_ph = [t for t in tecnicos_sel if t not in unidades_ph]
+
+        for tec in tecnicos_no_ph:
             cupo = 50
             acumulado_tec = []
             pols_disponibles = df_otros[~df_otros.index.isin(indices_asignados)]
 
             while cupo > 0 and not pols_disponibles.empty:
                 barrio_actual = pols_disponibles.iloc[0][col_barrio]
-                bloque_barrio = pols_disponibles[pols_disponibles[col_barrio] == barrio_actual].head(cupo)
+                bloque_barrio = pols_disponibles[
+                    pols_disponibles[col_barrio] == barrio_actual
+                ].head(cupo)
 
                 acumulado_tec.append(bloque_barrio)
                 indices_asignados.update(bloque_barrio.index)
