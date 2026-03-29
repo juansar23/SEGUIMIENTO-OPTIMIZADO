@@ -3,15 +3,14 @@ import pandas as pd
 import io
 import plotly.express as px
 
-# Configuración de la página
+# Configuración
 st.set_page_config(page_title="Dashboard Ejecutivo UT", layout="wide")
-
 st.title("📊 Dashboard Ejecutivo - Asignación por Bloque de Barrio")
 
 # Cargar archivo
 archivo = st.file_uploader("Sube el archivo de Seguimiento", type=["xls", "xlsx", "xlsm", "xlsb"])
 
-# Nombres de columnas
+# Columnas
 col_barrio = "BARRIO"
 col_ciclo = "CICLO_FACTURACION"
 col_direccion = "DIRECCION"
@@ -23,7 +22,7 @@ col_subcat = "SUBCATEGORIA"
 if archivo:
     try:
         # =========================
-        # 1. LECTURA DE DATOS
+        # 1. LECTURA
         # =========================
         if archivo.name.lower().endswith(".xls"):
             df = pd.read_excel(archivo, engine="xlrd")
@@ -32,7 +31,9 @@ if archivo:
 
         df.columns = df.columns.str.strip()
 
-        # Limpieza de deuda
+        # =========================
+        # LIMPIEZA DEUDA
+        # =========================
         df["_deuda_num"] = (
             df[col_deuda].astype(str)
             .str.replace("$", "", regex=False)
@@ -43,27 +44,28 @@ if archivo:
         df["_deuda_num"] = pd.to_numeric(df["_deuda_num"], errors="coerce").fillna(0)
 
         # =========================
-        # 2. TABS PRINCIPALES
+        # TABS
         # =========================
         tab_filtros, tab1, tab2 = st.tabs(["⚙️ Filtros", "📋 Tabla y Descarga", "📊 Dashboard"])
 
         # =========================
-        # TAB FILTROS
+        # FILTROS
         # =========================
         with tab_filtros:
             st.subheader("⚙️ Configuración de Filtros")
 
-            ciclos_disp = sorted(df[col_ciclo].astype(str).unique())
+            ciclos_disp = sorted(df[col_ciclo].dropna().astype(str).unique())
             ciclos_sel = st.multiselect("Filtrar Ciclos", ciclos_disp, default=ciclos_disp)
 
-            todos_tecnicos = sorted(df[col_tecnico].astype(str).unique())
+            # 🔥 FIX: quitar nan
+            todos_tecnicos = sorted(df[col_tecnico].dropna().astype(str).str.strip().unique())
             tecnicos_sel = st.multiselect("Técnicos a Procesar", todos_tecnicos, default=todos_tecnicos)
 
-            edades_disp = sorted(df[col_edad].astype(str).dropna().unique())
+            edades_disp = sorted(df[col_edad].dropna().astype(str).unique())
             edades_sel = st.multiselect("Filtrar por Rango de Edad", edades_disp, default=edades_disp)
 
         # =========================
-        # 3. FILTRAR DATOS
+        # FILTRADO BASE
         # =========================
         df_pool = df[
             (df[col_ciclo].astype(str).isin(ciclos_sel)) &
@@ -71,22 +73,18 @@ if archivo:
         ].copy()
 
         # =========================
-        # 4. LIMPIAR TÉCNICOS
+        # SEPARAR SIN TÉCNICO (ANTES DE STRING)
         # =========================
-        df_pool[col_tecnico] = df_pool[col_tecnico].astype(str).str.strip()
-
         df_sin_tecnico = df_pool[
-            (df_pool[col_tecnico].isna()) |
-            (df_pool[col_tecnico] == "") |
-            (df_pool[col_tecnico].str.lower() == "nan")
+            df_pool[col_tecnico].isna() |
+            (df_pool[col_tecnico].astype(str).str.strip() == "")
         ].copy()
 
-        df_con_tecnico = df_pool[
-            ~(df_pool.index.isin(df_sin_tecnico.index))
-        ].copy()
+        df_con_tecnico = df_pool.drop(df_sin_tecnico.index).copy()
+        df_con_tecnico[col_tecnico] = df_con_tecnico[col_tecnico].astype(str).str.strip()
 
         # =========================
-        # 5. LÓGICA DE ASIGNACIÓN
+        # LÓGICA DE ASIGNACIÓN
         # =========================
         unidades_ph = [
             "ITA SUSPENSION BQ 15 PH", "ITA SUSPENSION BQ 31 PH", "ITA SUSPENSION BQ 32 PH",
@@ -94,7 +92,7 @@ if archivo:
             "ITA SUSPENSION BQ 37 PH"
         ]
 
-        # PH (igual)
+        # PH
         df_ph_final = (
             df_con_tecnico[df_con_tecnico[col_tecnico].isin(unidades_ph)]
             .sort_values(by="_deuda_num", ascending=False)
@@ -113,22 +111,24 @@ if archivo:
         lista_final_otros = []
         indices_asignados = set()
 
-        # SOLO técnicos NO PH
         tecnicos_no_ph = [t for t in tecnicos_sel if t not in unidades_ph]
 
         for tec in tecnicos_no_ph:
             cupo = 50
             acumulado_tec = []
+
             pols_disponibles = df_otros[~df_otros.index.isin(indices_asignados)]
 
             while cupo > 0 and not pols_disponibles.empty:
                 barrio_actual = pols_disponibles.iloc[0][col_barrio]
+
                 bloque_barrio = pols_disponibles[
                     pols_disponibles[col_barrio] == barrio_actual
                 ].head(cupo)
 
                 acumulado_tec.append(bloque_barrio)
                 indices_asignados.update(bloque_barrio.index)
+
                 cupo -= len(bloque_barrio)
                 pols_disponibles = df_otros[~df_otros.index.isin(indices_asignados)]
 
@@ -140,7 +140,7 @@ if archivo:
         df_resultado = pd.concat([df_ph_final] + lista_final_otros, ignore_index=True)
 
         # =========================
-        # TAB 1: TABLA
+        # TABLA
         # =========================
         with tab1:
             st.dataframe(df_resultado.drop(columns=["_deuda_num"]), use_container_width=True)
@@ -149,14 +149,10 @@ if archivo:
             with pd.ExcelWriter(output, engine="openpyxl") as writer:
                 df_resultado.drop(columns=["_deuda_num"]).to_excel(writer, index=False)
 
-            st.download_button(
-                "📥 Descargar Excel",
-                data=output.getvalue(),
-                file_name="Asignacion_UT.xlsx"
-            )
+            st.download_button("📥 Descargar Excel", data=output.getvalue(), file_name="Asignacion_UT.xlsx")
 
         # =========================
-        # TAB 2: DASHBOARD
+        # DASHBOARD
         # =========================
         with tab2:
             c1, c2 = st.columns(2)
