@@ -2,7 +2,6 @@ import streamlit as st
 import pandas as pd
 import io
 import plotly.express as px
-from itertools import cycle
 
 # =========================
 # CONFIG
@@ -21,6 +20,9 @@ col_deuda = "DEUDA_TOTAL"
 col_edad = "RANGO_EDAD"
 col_subcat = "SUBCATEGORIA"
 
+# =========================
+# CACHE
+# =========================
 @st.cache_data
 def cargar_datos(file):
     if file.name.lower().endswith(".xls"):
@@ -33,7 +35,9 @@ if archivo:
         df = cargar_datos(archivo)
         df.columns = df.columns.str.strip()
 
-        # Limpieza
+        # =========================
+        # LIMPIEZA
+        # =========================
         df[col_subcat] = df[col_subcat].astype(str).str.strip()
 
         df["_deuda_num"] = (
@@ -44,6 +48,11 @@ if archivo:
             .str.strip()
         )
         df["_deuda_num"] = pd.to_numeric(df["_deuda_num"], errors="coerce").fillna(0)
+
+        # 🔥 Optimización de memoria
+        df[col_barrio] = df[col_barrio].astype("category")
+        df[col_ciclo] = df[col_ciclo].astype("category")
+        df[col_edad] = df[col_edad].astype("category")
 
         # =========================
         # TABS
@@ -70,7 +79,7 @@ if archivo:
 
             st.markdown("### 🎯 Prioridad de Rango de Edad")
             edad_prioridad = st.text_area(
-                "Orden (una por línea, arriba = mayor prioridad)",
+                "Orden (una por línea)",
                 "\n".join(edades_disp)
             ).split("\n")
 
@@ -118,55 +127,64 @@ if archivo:
         )
 
         # =========================
-        # OTROS + SIN TÉCNICO
+        # 🚀 ASIGNACIÓN ULTRA RÁPIDA
         # =========================
         df_otros = pd.concat([
             df_con_tecnico[~df_con_tecnico[col_tecnico].isin(unidades_ph)],
             df_sin_tecnico
         ]).copy()
 
-        # 🔥 AQUI SE APLICA PRIORIDAD
         df_otros = df_otros.sort_values(
             by=["_prioridad_edad", col_ciclo, col_barrio, col_direccion]
         )
 
-        lista_final_otros = []
+        grupos_barrio = list(df_otros.groupby(col_barrio))
 
         tecnicos_no_ph = [t for t in tecnicos_sel if t not in unidades_ph]
         cupo_por_tecnico = {tec: 50 for tec in tecnicos_no_ph}
-        ciclo_tecnicos = cycle(tecnicos_no_ph)
+        asignaciones = {tec: [] for tec in tecnicos_no_ph}
 
-        indices_disponibles = df_otros.index.tolist()
+        tec_idx = 0
+        total_tecnicos = len(tecnicos_no_ph)
 
-        while indices_disponibles:
-            tec = next(ciclo_tecnicos)
+        for _, grupo in grupos_barrio:
 
-            if cupo_por_tecnico[tec] <= 0:
-                continue
+            if all(cupo <= 0 for cupo in cupo_por_tecnico.values()):
+                break
 
-            idx_base = indices_disponibles[0]
-            barrio_actual = df_otros.loc[idx_base, col_barrio]
+            inicio = 0
+            grupo_len = len(grupo)
 
-            bloque_idx = [
-                idx for idx in indices_disponibles
-                if df_otros.loc[idx, col_barrio] == barrio_actual
-            ][:cupo_por_tecnico[tec]]
+            while inicio < grupo_len:
+                tec = tecnicos_no_ph[tec_idx % total_tecnicos]
 
-            if not bloque_idx:
-                indices_disponibles.pop(0)
-                continue
+                if cupo_por_tecnico[tec] <= 0:
+                    tec_idx += 1
+                    continue
 
-            bloque = df_otros.loc[bloque_idx].copy()
-            bloque[col_tecnico] = tec
+                cupo = cupo_por_tecnico[tec]
 
-            lista_final_otros.append(bloque)
+                bloque = grupo.iloc[inicio:inicio + cupo].copy()
+                bloque[col_tecnico] = tec
 
-            indices_disponibles = [i for i in indices_disponibles if i not in bloque_idx]
-            cupo_por_tecnico[tec] -= len(bloque_idx)
+                asignaciones[tec].append(bloque)
+
+                asignados = len(bloque)
+                cupo_por_tecnico[tec] -= asignados
+
+                inicio += asignados
+                tec_idx += 1
+
+        lista_final_otros = []
+        for tec in asignaciones:
+            if asignaciones[tec]:
+                lista_final_otros.append(pd.concat(asignaciones[tec]))
 
         df_resultado = pd.concat([df_ph_final] + lista_final_otros, ignore_index=True)
 
-        # Asegurar todos los técnicos
+        # =========================
+        # ASEGURAR TODOS LOS TÉCNICOS
+        # =========================
         presentes = set(df_resultado[col_tecnico].dropna().unique())
         faltantes = [t for t in tecnicos_sel if t not in presentes]
 
@@ -202,6 +220,7 @@ if archivo:
                 st.subheader("🥧 Distribución por Subcategoría")
                 conteo_sub = df_resultado[col_subcat].value_counts().reset_index()
                 conteo_sub.columns = [col_subcat, "cantidad"]
+
                 fig_pie = px.pie(conteo_sub, names=col_subcat, values="cantidad", hole=0.4)
                 st.plotly_chart(fig_pie, use_container_width=True)
 
@@ -210,6 +229,7 @@ if archivo:
             st.subheader("📊 Pólizas por Rango de Edad")
             conteo_edad = df_resultado[col_edad].value_counts().reset_index()
             conteo_edad.columns = [col_edad, "cantidad"]
+
             fig_bar = px.bar(conteo_edad, x=col_edad, y="cantidad", color=col_edad, text_auto=True)
             st.plotly_chart(fig_bar, use_container_width=True)
 
