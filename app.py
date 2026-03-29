@@ -9,6 +9,11 @@ import plotly.express as px
 st.set_page_config(page_title="Dashboard Ejecutivo UT", layout="wide")
 st.title("📊 Dashboard Ejecutivo - Asignación por Bloque de Barrio")
 
+# 🔥 BOTÓN LIMPIAR CACHE
+if st.button("🔄 Limpiar caché"):
+    st.cache_data.clear()
+    st.rerun()
+
 archivo = st.file_uploader("Sube el archivo de Seguimiento", type=["xls", "xlsx", "xlsm", "xlsb"])
 
 # Columnas
@@ -21,18 +26,25 @@ col_edad = "RANGO_EDAD"
 col_subcat = "SUBCATEGORIA"
 
 # =========================
-# CACHE
+# CARGA (SIN CACHE PARA EVITAR BUGS)
 # =========================
-@st.cache_data
 def cargar_datos(file):
     if file.name.lower().endswith(".xls"):
         return pd.read_excel(file, engine="xlrd")
     else:
         return pd.read_excel(file, engine="openpyxl")
 
-if archivo:
+# =========================
+# MAIN
+# =========================
+if archivo is not None:
     try:
         df = cargar_datos(archivo)
+
+        if df is None or df.empty:
+            st.warning("El archivo no tiene datos")
+            st.stop()
+
         df.columns = df.columns.str.strip()
 
         # =========================
@@ -48,11 +60,6 @@ if archivo:
             .str.strip()
         )
         df["_deuda_num"] = pd.to_numeric(df["_deuda_num"], errors="coerce").fillna(0)
-
-        # Optimización
-        df[col_barrio] = df[col_barrio].astype("category")
-        df[col_ciclo] = df[col_ciclo].astype("category")
-        df[col_edad] = df[col_edad].astype("category")
 
         # =========================
         # TABS
@@ -91,6 +98,10 @@ if archivo:
             (df[col_edad].astype(str).isin(edades_sel)) &
             (df[col_subcat].isin(subcat_sel))
         ].copy()
+
+        if df_pool.empty:
+            st.warning("No hay datos con los filtros seleccionados")
+            st.stop()
 
         # =========================
         # PRIORIDAD EDAD
@@ -158,19 +169,15 @@ if archivo:
 
             while i < n:
 
-                # cortar si todos llenos
                 if all(c <= 0 for c in cupo_por_tecnico.values()):
                     break
 
                 tec = tecnicos_no_ph[tec_idx % total_tecnicos]
 
-                # evitar loop infinito
                 if cupo_por_tecnico[tec] <= 0:
                     tec_idx += 1
-
                     if tec_idx > total_tecnicos * 2:
                         break
-
                     continue
 
                 cupo = cupo_por_tecnico[tec]
