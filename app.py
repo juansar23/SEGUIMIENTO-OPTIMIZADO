@@ -18,9 +18,6 @@ mapeo_ph = {
     "ITA SUSPENSION BQ 37 PH": "TATIANA ISABEL CASTRO GUZMAN"
 }
 
-# Orden solicitado para la gráfica
-ORDEN_EDAD_GRAFICA = ["0-30", "31-60", "61-90", "91-120", "121-360", "361-1080", "> 1080"]
-
 # Columnas
 col_barrio, col_ciclo, col_direccion = "BARRIO", "CICLO_FACTURACION", "DIRECCION"
 col_tecnico, col_unidad, col_deuda = "TECNICOS_INTEGRALES", "UNIDAD_TRABAJO", "DEUDA_TOTAL"
@@ -32,11 +29,6 @@ if archivo:
     try:
         df = pd.read_excel(archivo) if not archivo.name.lower().endswith(".xls") else pd.read_excel(archivo, engine="xlrd")
         df.columns = df.columns.str.strip()
-        
-        # Limpieza de datos
-        df[col_edad] = df[col_edad].astype(str).str.strip()
-        df[col_tecnico] = df[col_tecnico].astype(str).str.strip()
-        df[col_unidad] = df[col_unidad].astype(str).str.strip()
         df["_deuda_num"] = pd.to_numeric(df[col_deuda].astype(str).str.replace(r"[\$,.]", "", regex=True), errors="coerce").fillna(0)
 
         tab_filtros, tab1, tab2 = st.tabs(["⚙️ Configuración", "📋 Tabla Final", "📊 Dashboard"])
@@ -48,46 +40,41 @@ if archivo:
                 ciclos_sel = st.multiselect("Ciclos", sorted(df[col_ciclo].dropna().unique().astype(str)), default=df[col_ciclo].dropna().unique().astype(str))
                 subcat_sel = st.multiselect("Subcategoría", sorted(df[col_subcat].dropna().unique().astype(str)), default=df[col_subcat].dropna().unique().astype(str))
             with c2:
-                edades_reales = [e for e in ORDEN_EDAD_GRAFICA if e in df[col_edad].unique()]
-                prioridad_edades = st.multiselect("Prioridad de Edad:", edades_reales, default=edades_reales)
+                edades_disp = sorted(df[col_edad].dropna().astype(str).unique())
+                prioridad_edades = st.multiselect("Prioridad de Edad:", edades_disp, default=edades_disp)
             with c3:
                 nombres_ph = list(mapeo_ph.values())
-                # Lista de técnicos que NO son PH para el reparto de lo que sobre
-                tecnicos_reparto_disp = sorted([t for t in df[col_tecnico].dropna().unique() if t not in nombres_ph])
-                tecnicos_sel = st.multiselect("Técnicos para Reparto General", tecnicos_reparto_disp, default=tecnicos_reparto_disp)
+                tecnicos_reparto = sorted([t for t in df[col_tecnico].dropna().unique() if t not in nombres_ph])
+                tecnicos_sel = st.multiselect("Técnicos Reparto", tecnicos_reparto, default=tecnicos_reparto)
 
         # =========================
         # PROCESAMIENTO
         # =========================
         df_pool = df[(df[col_ciclo].astype(str).isin(ciclos_sel)) & 
-                     (df[col_edad].isin(prioridad_edades)) &
+                     (df[col_edad].astype(str).isin(prioridad_edades)) &
                      (df[col_subcat].astype(str).isin(subcat_sel))].copy()
 
         df_pool[col_edad] = pd.Categorical(df_pool[col_edad], categories=prioridad_edades, ordered=True)
 
         # 1. ASIGNACIÓN PH (ESTRICTA)
         df_ph_final = pd.DataFrame()
-        indices_ph_ocupados = set()
-        
         if not excluir_ph:
             list_ph = []
             for unidad, funcionario in mapeo_ph.items():
-                # Filtramos las pólizas que pertenecen a esa unidad PH específica
                 p_ph = df_pool[df_pool[col_unidad] == unidad].sort_values(by=[col_edad, "_deuda_num"], ascending=[True, False]).head(50)
                 if not p_ph.empty:
                     p_ph[col_tecnico] = funcionario
                     list_ph.append(p_ph)
-                    indices_ph_ocupados.update(p_ph.index)
-            if list_ph: 
-                df_ph_final = pd.concat(list_ph)
+            if list_ph: df_ph_final = pd.concat(list_ph)
 
-        # 2. REPARTO GENERAL (BLOQUE DE BARRIOS)
-        # Excluimos las unidades PH para que no se mezclen con el reparto de Adrian y compañía
+        # 2. REPARTO GENERAL POR BLOQUE DE BARRIOS
+        # Excluimos unidades PH
         df_otros = df_pool[~df_pool[col_unidad].isin(mapeo_ph.keys())].copy()
+        # ORDEN CRÍTICO: Prioridad Edad -> Ciclo -> Barrio -> Dirección
         df_otros = df_otros.sort_values(by=[col_edad, col_ciclo, col_barrio, col_direccion])
 
         lista_final_otros = []
-        indices_asignados = indices_ph_ocupados.copy()
+        indices_asignados = set(df_ph_final.index) if not df_ph_final.empty else set()
 
         for tec in tecnicos_sel:
             cupo = 50
@@ -95,6 +82,7 @@ if archivo:
             
             while cupo > 0 and not pols_libres.empty:
                 barrio_actual = pols_libres.iloc[0][col_barrio]
+                # Tomamos el bloque del mismo barrio hasta completar el cupo
                 bloque_barrio = pols_libres[pols_libres[col_barrio] == barrio_actual].head(cupo).copy()
                 
                 bloque_barrio[col_tecnico] = tec
@@ -114,19 +102,10 @@ if archivo:
                 st.dataframe(df_resultado.drop(columns=["_deuda_num"]), use_container_width=True)
                 output = io.BytesIO()
                 with pd.ExcelWriter(output) as w: df_resultado.drop(columns=["_deuda_num"]).to_excel(w, index=False)
-                st.download_button("📥 Descargar", output.getvalue(), "Asignacion_UT.xlsx")
+                st.download_button("📥 Descargar", output.getvalue(), "Asignacion.xlsx")
 
         with tab2:
             if not df_resultado.empty:
-                # GRAFICA DE EDAD (Ordenada)
-                st.subheader("📊 Pólizas por Rango de Edad")
-                conteo_edad = df_resultado[col_edad].value_counts().reset_index()
-                conteo_edad.columns = [col_edad, "cantidad"]
-                fig_edad = px.bar(conteo_edad, x=col_edad, y="cantidad", color=col_edad, 
-                                  category_orders={col_edad: ORDEN_EDAD_GRAFICA}, text_auto=True)
-                st.plotly_chart(fig_edad, use_container_width=True)
-                
-                st.divider()
                 c_d1, c_d2 = st.columns(2)
                 with c_d1:
                     st.subheader("🏆 Top 10 Técnicos (Deuda)")
